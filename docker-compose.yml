@@ -1,0 +1,31 @@
+version: '3.9'
+
+services:
+  jitsi-ms:
+    build: .
+    container_name: jitsi-microservice
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      JITSI_MODE: ${JITSI_MODE:-public}
+      JITSI_PUBLIC_URL: ${JITSI_PUBLIC_URL:-https://meet.jit.si}
+      JITSI_PRIVATE_URL: ${JITSI_PRIVATE_URL:-}
+      JITSI_APP_ID: ${JITSI_APP_ID:-}
+      JITSI_APP_SECRET: ${JITSI_APP_SECRET:-}
+      JITSI_JWT_TTL: ${JITSI_JWT_TTL:-3600}
+      API_KEY: ${API_KEY:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - visiodoc-net
+
+networks:
+  visiodoc-net:
+    driver: bridge

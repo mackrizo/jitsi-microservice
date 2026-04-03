@@ -1,0 +1,38 @@
+{
+  "name": "jitsi-microservice",
+  "description": "Jitsi Meet microservice — public/private instance switching",
+  "version": "1.0.0",
+  "source": {
+    "type": "github",
+    "repo": "mackrizo/jitsi-microservice",
+    "branch": "main"
+  },
+  "build": {
+    "runtime": "nodejs",
+    "version": "20",
+    "installCommand": "npm ci --only=production",
+    "startCommand": "node src/server.js"
+  },
+  "services": [
+    {
+      "name": "jitsi-ms",
+      "type": "web",
+      "port": 3000,
+      "healthCheck": "/health",
+      "scaling": {
+        "min": 1,
+        "max": 3
+      }
+    }
+  ],
+  "env": [
+    { "key": "NODE_ENV", "value": "production" },
+    { "key": "JITSI_MODE", "value": "public", "description": "public or private" },
+    { "key": "JITSI_PUBLIC_URL", "value": "https://meet.jit.si" },
+    { "key": "JITSI_PRIVATE_URL", "secret": true },
+    { "key": "JITSI_APP_ID", "secret": true },
+    { "key": "JITSI_APP_SECRET", "secret": true },
+    { "key": "API_KEY", "secret": true },
+    { "key": "ALLOWED_ORIGINS", "value": "" }
+  ]
+}
