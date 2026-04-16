@@ -1,176 +1,189 @@
-const jwt = require('jsonwebtoken');
-const { v4: uuidv4 } = require('uuid');
+﻿'use strict';
+
+const jwt    = require('jsonwebtoken');
+const crypto = require('crypto');
 
 /**
- * JitsiService
- * Gère la logique de génération de room URL et JWT
- * selon le mode actif (public | private).
+ * JitsiService â€” abstraction des 3 modes de fonctionnement
  *
- * Mode public  : meet.jit.si, aucun JWT requis
- * Mode private : instance Hostinger, JWT signé requis
+ * Modes :
+ *   public  â†’ meet.jit.si, gratuit, sans JWT (dev + dÃ©marrage prod)
+ *   jaas    â†’ 8x8 JaaS, JWT RS256, pay-per-MAU (croissance maÃ®trisÃ©e)
+ *   private â†’ instance Hetzner auto-hÃ©bergÃ©e, JWT HS256 (contrÃ´le total)
+ *
+ * Un seul mode est actif Ã  la fois, contrÃ´lÃ© par process.env.JITSI_MODE.
+ * Le switch se fait Ã  chaud via POST /api/jitsi/switch sans redÃ©ploiement.
  */
 class JitsiService {
-  constructor() {
-    // Mode actif - peut être surchargé à chaud via switchMode()
-    this._mode = process.env.JITSI_MODE || 'public';
-  }
 
-  get mode() {
-    return this._mode;
-  }
-
-  switchMode(newMode) {
-    if (!['public', 'private'].includes(newMode)) {
-      throw new Error(`Invalid mode: ${newMode}. Must be 'public' or 'private'.`);
-    }
-    this._mode = newMode;
-    console.log(`[JitsiService] Mode switched to: ${newMode}`);
-  }
-
-  /**
-   * Retourne la config active pour le frontend
-   */
-  getConfig() {
-    const baseUrl = this._getBaseUrl();
-    return {
-      mode: this._mode,
-      baseUrl,
-      requiresJwt: this._mode === 'private',
-      appId: this._mode === 'private' ? process.env.JITSI_APP_ID : null,
-    };
-  }
-
-  /**
-   * Crée ou rejoint une room Jitsi
-   * @param {Object} options
-   * @param {string} options.roomName   - Nom de la salle (auto-généré si absent)
-   * @param {Object} options.user       - { name, email, avatar }
-   * @param {string} options.role       - 'moderator' | 'participant'
-   * @param {number} options.ttl        - Durée JWT en secondes (optionnel)
-   * @returns {Object} roomData
-   */
-  createRoom({ roomName, user = {}, role = 'participant', ttl } = {}) {
-    const sanitizedRoom = this._sanitizeRoomName(roomName || this._generateRoomName());
-    const baseUrl = this._getBaseUrl();
-
-    const result = {
-      roomName: sanitizedRoom,
-      roomUrl: `${baseUrl}/${sanitizedRoom}`,
-      mode: this._mode,
-      createdAt: new Date().toISOString(),
-    };
-
-    if (this._mode === 'private') {
-      const token = this._generateJwt({ roomName: sanitizedRoom, user, role, ttl });
-      result.jwt = token;
-      result.roomUrl = `${baseUrl}/${sanitizedRoom}?jwt=${token}`;
-    }
-
-    return result;
-  }
-
-  /**
-   * Retourne les infos d'une room existante (embed config)
-   */
-  getRoomInfo(roomId) {
-    const baseUrl = this._getBaseUrl();
-    return {
-      roomId,
-      roomUrl: `${baseUrl}/${roomId}`,
-      mode: this._mode,
-      embedConfig: this._getEmbedConfig(roomId),
-    };
-  }
-
-  // ── Private Helpers ───────────────────────────────────────────────
-
+  // â”€â”€ Base URL selon le mode actif â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   _getBaseUrl() {
-    return this._mode === 'private'
-      ? (process.env.JITSI_PRIVATE_URL || 'https://jitsi.yourdomain.com')
-      : (process.env.JITSI_PUBLIC_URL || 'https://meet.jit.si');
+    switch (process.env.JITSI_MODE) {
+      case 'jaas':
+        return `https://8x8.vc/${process.env.JAAS_APP_ID}`;
+      case 'private': {
+        const url = process.env.JITSI_PRIVATE_URL;
+        if (!url) throw new Error('[jitsi-ms] JITSI_PRIVATE_URL est requis en mode private');
+        return url;
+      }
+      default:
+        return process.env.JITSI_PUBLIC_URL || 'https://meet.jit.si';
+    }
   }
 
-  _generateRoomName() {
-    // Format: visiodoc-xxxx-xxxx
-    const short = uuidv4().split('-').slice(0, 2).join('-');
-    return `visiodoc-${short}`;
-  }
+  // â”€â”€ GÃ©nÃ©ration JWT selon le mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  _generateJwt(roomName, user, role) {
+    const mode        = process.env.JITSI_MODE || 'public';
+    const isModerator = role === 'moderator';
 
-  _sanitizeRoomName(name) {
-    // Jitsi room names: alphanumeric + hyphens, no spaces
-    return name
-      .toLowerCase()
-      .replace(/[^a-z0-9-_]/g, '-')
-      .replace(/-+/g, '-')
-      .substring(0, 64);
-  }
+    if (mode === 'public') return null;
 
-  /**
-   * Génère un JWT signé pour l'instance privée
-   * Compatible avec le plugin prosody token de Jitsi
-   */
-  _generateJwt({ roomName, user, role, ttl }) {
-    const secret = process.env.JITSI_APP_SECRET;
-    const appId = process.env.JITSI_APP_ID;
-    const expiresIn = ttl || parseInt(process.env.JITSI_JWT_TTL, 10) || 3600;
+    // â”€â”€ Mode JaaS : RS256, format 8x8 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    if (mode === 'jaas') {
+      const appId      = process.env.JAAS_APP_ID;
+      const privateKey = process.env.JAAS_PRIVATE_KEY;
+      const apiKeyId   = process.env.JAAS_API_KEY_ID;
 
-    if (!secret || !appId) {
-      throw new Error(
-        'JITSI_APP_SECRET and JITSI_APP_ID must be set for private mode'
+      if (!appId || !privateKey || !apiKeyId) {
+        throw new Error(
+          '[jitsi-ms] JAAS_APP_ID, JAAS_PRIVATE_KEY et JAAS_API_KEY_ID sont requis en mode jaas'
+        );
+      }
+
+      return jwt.sign(
+        {
+          aud: 'jitsi',
+          iss: 'chat',
+          sub: appId,
+          room: roomName,
+          context: {
+            user: {
+              id:        user.email || crypto.randomUUID(),
+              name:      user.name,
+              email:     user.email     || '',
+              avatar:    user.avatar    || '',
+              moderator: isModerator
+            },
+            features: {
+              recording:       isModerator,
+              livestreaming:   false,
+              'screen-sharing': true,
+              'outbound-call':  false
+            }
+          }
+        },
+        privateKey,
+        {
+          algorithm:  'RS256',
+          expiresIn:  parseInt(process.env.JITSI_JWT_TTL) || 3600,
+          header: {
+            kid: `vpaas-magic-cookie-${appId}/${apiKeyId}`,
+            alg: 'RS256'
+          }
+        }
       );
     }
 
-    const payload = {
-      context: {
-        user: {
-          name: user.name || 'Guest',
-          email: user.email || '',
-          avatar: user.avatar || '',
-          affiliation: role === 'moderator' ? 'owner' : 'member',
-        },
-        features: {
-          livestreaming: false,
-          recording: role === 'moderator',
-          transcription: false,
-          'outbound-call': false,
-        },
-      },
-      aud: appId,
-      iss: appId,
-      sub: new URL(process.env.JITSI_PRIVATE_URL).hostname,
-      room: roomName,
-      moderator: role === 'moderator',
-    };
+    // â”€â”€ Mode private : HS256, instance Hetzner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    if (mode === 'private') {
+      const secret = process.env.JITSI_APP_SECRET;
+      const appId  = process.env.JITSI_APP_ID;
+      const sub    = new URL(process.env.JITSI_PRIVATE_URL).hostname;
 
-    return jwt.sign(payload, secret, {
-      expiresIn,
-      algorithm: 'HS256',
-    });
+      if (!secret || !appId) {
+        throw new Error(
+          '[jitsi-ms] JITSI_APP_SECRET et JITSI_APP_ID sont requis en mode private'
+        );
+      }
+
+      return jwt.sign(
+        {
+          sub,
+          room: roomName,
+          context: {
+            user: {
+              name:      user.name,
+              email:     user.email || '',
+              moderator: isModerator
+            },
+            features: {
+              recording:       isModerator,
+              'screen-sharing': true
+            }
+          }
+        },
+        secret,
+        {
+          algorithm: 'HS256',
+          issuer:    appId,
+          expiresIn: parseInt(process.env.JITSI_JWT_TTL) || 3600
+        }
+      );
+    }
+
+    throw new Error(
+      `[jitsi-ms] JITSI_MODE invalide : "${mode}". Valeurs acceptÃ©es : public | jaas | private`
+    );
   }
 
-  /**
-   * Config pour l'intégration via Jitsi iFrame API
-   */
-  _getEmbedConfig(roomName) {
+  // â”€â”€ Config iFrame Jitsi External API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  _getEmbedConfig(mode, baseUrl) {
+    const hostname = new URL(baseUrl).hostname;
+    const domain   = mode === 'jaas'
+      ? `${hostname}/${process.env.JAAS_APP_ID}`
+      : hostname;
+
     return {
+      domain,
       configOverwrite: {
-        startWithAudioMuted: true,
-        startWithVideoMuted: false,
-        prejoinPageEnabled: true,
-        disableDeepLinking: true,
-        toolbarButtons: [
-          'microphone', 'camera', 'desktop', 'hangup',
-          'chat', 'raisehand', 'tileview', 'settings',
-        ],
+        startWithAudioMuted:    false,
+        startWithVideoMuted:    false,
+        disableDeepLinking:     true,
+        enableNoisyMicDetection: true
       },
       interfaceConfigOverwrite: {
-        SHOW_JITSI_WATERMARK: false,
-        SHOW_WATERMARK_FOR_GUESTS: false,
-        MOBILE_APP_PROMO: false,
-      },
+        SHOW_JITSI_WATERMARK: mode === 'public',
+        SHOW_BRAND_WATERMARK: false,
+        TOOLBAR_BUTTONS: ['microphone','camera','desktop','chat','tileview','hangup']
+      }
+    };
+  }
+
+  // â”€â”€ CrÃ©ation d'une room â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  createRoom(roomName, user, role = 'participant') {
+    if (!roomName || typeof roomName !== 'string') {
+      throw new Error('[jitsi-ms] roomName est requis et doit Ãªtre une chaÃ®ne');
+    }
+
+    const mode    = process.env.JITSI_MODE || 'public';
+    const baseUrl = this._getBaseUrl();
+    const token   = this._generateJwt(roomName, user, role);
+
+    const roomUrl = mode === 'jaas'
+      ? `${baseUrl}/${roomName}${token ? `?jwt=${token}` : ''}`
+      : `${baseUrl}/${roomName}`;
+
+    return {
+      roomName,
+      roomUrl,
+      mode,
+      jwt:          token   || undefined,
+      requiresJwt:  !!token,
+      embedConfig:  this._getEmbedConfig(mode, baseUrl),
+      createdAt:    new Date().toISOString()
+    };
+  }
+
+  // â”€â”€ Config active (GET /api/jitsi/config) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  getConfig() {
+    const mode = process.env.JITSI_MODE || 'public';
+    return {
+      mode,
+      baseUrl:      this._getBaseUrl(),
+      requiresJwt:  mode !== 'public',
+      jwtAlgorithm: mode === 'jaas' ? 'RS256' : mode === 'private' ? 'HS256' : null
     };
   }
 }
 
-// Singleton
 module.exports = new JitsiService();

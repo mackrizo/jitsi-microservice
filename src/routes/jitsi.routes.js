@@ -1,68 +1,90 @@
-const express = require('express');
-const router = express.Router();
-const jitsiService = require('../services/jitsi.service');
-const { apiKeyAuth } = require('../middlewares/auth.middleware');
+﻿'use strict';
 
-/**
- * GET /api/jitsi/config
- * Retourne la configuration active du service Jitsi
- */
+const express    = require('express');
+const router     = express.Router();
+const jitsiSvc   = require('../services/jitsi.service');
+const { auth, adminAuth } = require('../middlewares/auth.middleware');
+
+// GET /api/jitsi/config â€” config du mode actif (public)
 router.get('/config', (req, res) => {
   try {
-    const config = jitsiService.getConfig();
-    res.json({ success: true, data: config });
+    res.json({ success: true, data: jitsiSvc.getConfig() });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-/**
- * POST /api/jitsi/room
- * Crée une nouvelle room Jitsi
- * Body: { roomName?, user?, role?, ttl? }
- */
-router.post('/room', apiKeyAuth, (req, res) => {
+// POST /api/jitsi/room â€” crÃ©er une room
+router.post('/room', auth, (req, res) => {
   try {
-    const { roomName, user, role, ttl } = req.body;
-    const roomData = jitsiService.createRoom({ roomName, user, role, ttl });
-    res.status(201).json({ success: true, data: roomData });
-  } catch (err) {
-    res.status(400).json({ success: false, error: err.message });
-  }
-});
+    const { roomName, user, role } = req.body;
+    if (!roomName) return res.status(400).json({ success: false, error: 'roomName requis' });
+    if (!user || !user.name) return res.status(400).json({ success: false, error: 'user.name requis' });
 
-/**
- * GET /api/jitsi/room/:roomId
- * Récupère les infos d'une room (embed config incluse)
- */
-router.get('/room/:roomId', apiKeyAuth, (req, res) => {
-  try {
-    const { roomId } = req.params;
-    const roomInfo = jitsiService.getRoomInfo(roomId);
-    res.json({ success: true, data: roomInfo });
+    const data = jitsiSvc.createRoom(roomName, user, role);
+    res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-/**
- * POST /api/jitsi/switch
- * Bascule entre mode public et privé à chaud
- * Body: { mode: 'public' | 'private' }
- * ⚠️ En production: protéger cette route par rôle admin
- */
-router.post('/switch', apiKeyAuth, (req, res) => {
+// GET /api/jitsi/room/:id â€” infos d'une room
+router.get('/room/:id', auth, (req, res) => {
   try {
-    const { mode } = req.body;
-    jitsiService.switchMode(mode);
-    res.json({
-      success: true,
-      message: `Switched to ${mode} mode`,
-      data: jitsiService.getConfig(),
+    const roomName = req.params.id;
+    const user     = { name: req.query.name || 'Guest', email: req.query.email };
+    const role     = req.query.role || 'participant';
+    const data     = jitsiSvc.createRoom(roomName, user, role);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/jitsi/switch â€” switch de mode Ã  chaud (admin uniquement)
+router.post('/switch', adminAuth, (req, res) => {
+  const { mode } = req.body;
+  const validModes = ['public', 'jaas', 'private'];
+
+  if (!validModes.includes(mode)) {
+    return res.status(400).json({
+      success: false,
+      error: `Mode invalide. Valeurs acceptÃ©es : ${validModes.join(' | ')}`
     });
-  } catch (err) {
-    res.status(400).json({ success: false, error: err.message });
   }
+
+  // Valider les variables requises AVANT de switcher
+  const missing = [];
+  if (mode === 'jaas') {
+    if (!process.env.JAAS_APP_ID)      missing.push('JAAS_APP_ID');
+    if (!process.env.JAAS_PRIVATE_KEY) missing.push('JAAS_PRIVATE_KEY');
+    if (!process.env.JAAS_API_KEY_ID)  missing.push('JAAS_API_KEY_ID');
+  }
+  if (mode === 'private') {
+    if (!process.env.JITSI_PRIVATE_URL) missing.push('JITSI_PRIVATE_URL');
+    if (!process.env.JITSI_APP_SECRET)  missing.push('JITSI_APP_SECRET');
+    if (!process.env.JITSI_APP_ID)      missing.push('JITSI_APP_ID');
+  }
+
+  if (missing.length > 0) {
+    return res.status(400).json({
+      success: false,
+      error:   `Variables manquantes pour le mode "${mode}" : ${missing.join(', ')}`
+    });
+  }
+
+  const previousMode       = process.env.JITSI_MODE || 'public';
+  process.env.JITSI_MODE   = mode;
+  console.log(`[jitsi-ms] Switch mode : ${previousMode} â†’ ${mode}`);
+
+  res.json({
+    success: true,
+    data: {
+      previousMode,
+      currentMode: mode,
+      switchedAt:  new Date().toISOString()
+    }
+  });
 });
 
 module.exports = router;
