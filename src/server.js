@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 8080;
 app.use(helmet());
 app.use(cors({ origin: (process.env.ALLOWED_ORIGINS || '').split(',') }));
 app.use(express.json());
-app.use(rateLimit({ windowMs: 60_000, max: 100 }));
+app.use(rateLimit({ windowMs: 60000, max: 100 }));
 
 app.get('/health', (req, res) => res.json({
   status: 'ok',
@@ -23,6 +23,6 @@ app.get('/health', (req, res) => res.json({
 
 app.use('/api/jitsi', jitsiRoutes);
 
-app.listen(PORT, () => console.log(Jitsi microservice running on port ));
+app.listen(PORT, () => console.log('Jitsi microservice running on port ' + PORT));
 
 module.exports = app;
