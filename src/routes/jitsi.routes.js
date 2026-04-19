@@ -6,14 +6,6 @@ const jitsiSvc = require('../services/jitsi.service');
 const { auth, adminAuth } = require('../middlewares/auth.middleware');
 
 
-// DEBUG TEMPORAIRE — à supprimer après
-router.get('/debug-key', (req, res) => {
-  res.json({
-    env_key: process.env.API_KEY,
-    env_key_length: (process.env.API_KEY || '').length,
-    env_key_hex: Buffer.from(process.env.API_KEY || '').toString('hex')
-  });
-});
 // GET /api/jitsi/config â€” config du mode actif (public)
 router.get('/config', (req, res) => {
   try {

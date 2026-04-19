@@ -1,0 +1,40 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: jitsi-ms
+  namespace: '168143163308'
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    spec:
+      serviceAccountName: jitsi-ms-sa@visiodoc-prod.iam.gserviceaccount.com
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      containers:
+      - image: europe-west1-docker.pkg.dev/visiodoc-prod/visiodoc-ms/jitsi-ms:latest
+        ports:
+        - containerPort: 8080
+          name: http1
+        resources:
+          limits:
+            cpu: '1'
+            memory: 256Mi
+        env:
+        - name: JITSI_MODE
+          value: public
+        - name: NODE_ENV
+          value: production
+        - name: JITSI_PUBLIC_URL
+          value: https://meet.jit.si
+        - name: JITSI_PRIVATE_URL
+          value: https://jitsi.visiodoc.online
+        - name: JITSI_APP_ID
+          value: visiodoc
+        - name: JAAS_APP_ID
+          value: vpaas-magic-cookie-16740ef6b88141cf9ce72797fc785aa1
+        - name: JAAS_API_KEY_ID
+          value: |-
+            MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApAZoOs/7sMRX4Rob7ygI
+            AV158WPM8pyE1HOYFlJJEiKzaRQdqx6sk+ZQW8aXmMVl+HYwjyKvyLzDQVNBUyNt
+            hVDxz7loKAuaAsLwRVWRYRn7eHi6ElZsXrKGvxoEO8pheAyTlVZ+0piVceh3iU
